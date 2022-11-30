@@ -1,0 +1,62 @@
+.archive-build-artifact: &archive-build-artifact |
+  tar czf target.tgz target/
+
+.extract-build-artifact: &extract-build-artifact |
+  tar xzf target.tgz
+
+.set-pom: &set-pom |
+  sed -i -e "s/pr0j3ct/${GROUP_ID}/" -e "s/4rt1f4ct/${ARTIFACT_ID}/" pom.xml
+
+stages:
+  - build
+  - test
+  - deploy
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}    
+
+variables:
+  GROUP_ID: ${CI_PROJECT}
+  ARTIFACT_ID: ${CI_PROJECT_NAME}
+  HELM_RELEASE_NAME: ${CI_PROJECT_NAME}
+
+build-application:
+  stage: build
+  image: openjdk
+  script:
+    - *set-pom
+    - sh -x ./mvnw package -Dmaven.test.skip -Dci_branch=${CI_COMMIT_REF_SLUG} -Dci_group_id=${CI_GROUP_ID}
+  artifacts:
+    paths:
+      - target/      
+
+test-application:
+  image: openjdk
+  stage: test
+  script:
+    - *set-pom
+    - sh ./mvnw verify -Dci_branch=${CI_COMMIT_REF_SLUG} -Dci_group_id=${CI_GROUP_ID}
+    - awk -F"," '{ instructions += $4 + $5; covered += $5 } END { print covered, "/", instructions, " instructions covered"; print 100*covered/instructions, "% covered" }' target/site/jacoco/jacoco.csv
+  coverage: '/(\d+(\.\d+)? %) covered/'
+  artifacts:
+    paths:
+      - target/  
+    reports:
+      junit: 
+        - target/surefire-reports/*.xml
+        - target/failsafe-reports/*.xml
+
+deploy-webapp:
+  stage: deploy
+  image: mcr.microsoft.com/azure-cli
+  script:
+    - apk add openjdk17
+    - az login --service-principal -u $APPLICATION_ID -p $APPLICATION_SECRET --tenant $TENANT_ID
+    - sh ./mvnw azure-webapp:deploy -DsubscriptionId=${CI_SUBSCRIPTION_ID} -DappName=${CI_APPNAME} -DresourceGroupName=${CI_RESOURCEGROUPNAME} -Dci_group_id=${CI_GROUP_ID}
+  only:
+    - main
+    - test
+
+
+
+
